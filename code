@@ -1,0 +1,155 @@
+"use  client"
+// pages/index.tsx
+import { useEffect, useRef, useState } from 'react';
+import * as handpose from '@tensorflow-models/handpose';
+import '@tensorflow/tfjs-backend-webgl';
+import * as tf from '@tensorflow/tfjs';
+
+export default function Web() {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [points, setPoints] = useState([]);
+  const [detectedWord, setDetectedWord] = useState('');
+
+  useEffect(() => {
+    const loadModel = async () => {
+      const net = await handpose.load();
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+
+      const setupCamera = async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        await video.play();
+        video.width = 640;
+        video.height = 480;
+        canvas.width = 640;
+        canvas.height = 480;
+      };
+
+      await setupCamera();
+
+      const detect = async () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const predictions = await net.estimateHands(video);
+
+        if (predictions.length > 0) {
+          const landmarks = predictions[0].landmarks;
+
+          // Draw hand skeleton
+          for (let i = 0; i < landmarks.length; i++) {
+            const [x, y] = landmarks[i];
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = 'blue';
+            ctx.fill();
+          }
+
+          const finger = predictions[0].annotations.indexFinger[3];
+          const [x, y] = finger;
+
+          if (isDrawing) {
+            setPoints(prev => [...prev, { x, y }]);
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, 2 * Math.PI);
+            ctx.fill();
+          }
+
+          // Detect thumb direction to open app
+          const thumbTip = predictions[0].annotations.thumb[3];
+          const thumbBase = predictions[0].annotations.thumb[0];
+          const dx = thumbTip[0] - thumbBase[0];
+          const dy = thumbTip[1] - thumbBase[1];
+
+          if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 50) {
+              openApp('youtube');
+            } else if (dx < -50) {
+              openApp('chrome');
+            }
+          } else {
+            if (dy > 50) {
+              openApp('notepad');
+            } else if (dy < -50) {
+              openApp('gmail');
+            }
+          }
+        }
+        requestAnimationFrame(detect);
+      };
+
+      detect();
+    };
+
+    loadModel();
+  }, [isDrawing]);
+
+  const normalizePoints = (points) => {
+    if (points.length === 0) return [];
+    const xs = points.map(p => p.x);
+    const ys = points.map(p => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+    const scale = 100 / Math.max(maxX - minX, maxY - minY);
+
+    return points.map(p => ({
+      x: (p.x - minX) * scale,
+      y: (p.y - minY) * scale,
+    }));
+  };
+
+  const recognizeWord = (normalized) => {
+    if (normalized.length < 10) return 'unknown';
+    // Fake recognizer - replace with real ML
+    if (normalized.length > 60) return 'youtube';
+    if (normalized.length > 40) return 'chrome';
+    if (normalized.length > 20) return 'notepad';
+    return 'unknown';
+  };
+
+  const openApp = (word) => {
+    const apps = {
+      youtube: 'https://www.youtube.com',
+      chrome: 'https://www.google.com',
+      notepad: 'https://anotepad.com',
+      gmail: 'https://mail.google.com',
+    };
+    if (apps[word]) {
+      window.open(apps[word], '_blank');
+    }
+  };
+
+  const handleStart = () => {
+    setPoints([]);
+    setDetectedWord('');
+    setIsDrawing(true);
+  };
+
+  const handleStop = () => {
+    setIsDrawing(false);
+    const normalized = normalizePoints(points);
+    const prediction = recognizeWord(normalized);
+    setDetectedWord(prediction);
+    openApp(prediction);
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
+      <header className="w-full bg-blue-600 text-white text-center py-4 text-2xl font-semibold shadow-md z-30 relative">
+        Air Draw Word Recognition
+      </header>
+      <video ref={videoRef} className="absolute top-0 left-0 w-full h-full object-cover z-0" muted />
+      <canvas ref={canvasRef} className="absolute top-0 left-0 z-10" />
+      <div className="relative z-20 mt-4">
+        <button onClick={handleStart} className="bg-green-600 text-white px-4 py-2 rounded m-2">Start Drawing</button>
+        <button onClick={handleStop} className="bg-red-600 text-white px-4 py-2 rounded m-2">Stop & Detect</button>
+        {detectedWord && <div className="mt-4 text-xl font-bold">Detected: {detectedWord}</div>}
+      </div>
+    </div>
+  );
+}
